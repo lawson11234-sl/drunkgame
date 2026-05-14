@@ -415,6 +415,8 @@ h1 {
 }
 
 .dice-row {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -445,6 +447,8 @@ h1 {
 }
 
 .hidden-dice {
+  position: relative;
+  z-index: 2;
   color: var(--muted);
   min-height: 58px;
   display: grid;

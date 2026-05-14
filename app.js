@@ -8,11 +8,11 @@
   const channel = "BroadcastChannel" in window ? new BroadcastChannel(CHANNEL_NAME) : null;
   const { isHigherBid, isLegalBid, legalBidOptions, countBidMatches: countDiceGroupsForBid } = window.LiarDiceRules;
   const firebaseConfig = window.FIREBASE_CONFIG || {};
-  const firebaseEnabled = Boolean(window.firebase && firebaseConfig.apiKey && firebaseConfig.databaseURL);
-  const database = firebaseEnabled ? window.firebase.initializeApp(firebaseConfig).database() : null;
+  const firebaseEnabled = Boolean(firebaseConfig.databaseURL);
   const remoteRooms = {};
   let watchedRoomCode = null;
-  let watchedRoomRef = null;
+  let watchedRoomTimer = null;
+  const savingRooms = new Set();
   let shaking = false;
   let showDice = true;
   let noticeText = "";
@@ -55,25 +55,54 @@
     return "rooms/" + code;
   }
 
+  function roomUrl(code) {
+    const baseUrl = firebaseConfig.databaseURL.replace(/\/$/, "");
+    return baseUrl + "/" + roomPath(code) + ".json";
+  }
+
   function watchRoom(code) {
     if (!firebaseEnabled || !code || watchedRoomCode === code) return;
-    if (watchedRoomRef) watchedRoomRef.off();
+    if (watchedRoomTimer) clearInterval(watchedRoomTimer);
     watchedRoomCode = code;
-    watchedRoomRef = database.ref(roomPath(code));
-    watchedRoomRef.on("value", (snapshot) => {
-      const room = snapshot.val();
-      if (room) {
-        remoteRooms[code] = room;
-      } else {
-        delete remoteRooms[code];
-      }
-      render();
-    });
+    const syncRoom = () => {
+      if (savingRooms.has(code)) return;
+      fetchRemoteRoom(code).then((room) => {
+        if (watchedRoomCode !== code) return;
+        if (room) {
+          remoteRooms[code] = room;
+        } else {
+          delete remoteRooms[code];
+        }
+        render();
+      }).catch(() => {
+        noticeText = "线上同步暂时连不上，请刷新页面再试。";
+        render();
+      });
+    };
+    syncRoom();
+    watchedRoomTimer = setInterval(syncRoom, 1200);
   }
 
   function fetchRemoteRoom(code) {
     if (!firebaseEnabled) return Promise.resolve(null);
-    return database.ref(roomPath(code)).once("value").then((snapshot) => snapshot.val());
+    return fetch(roomUrl(code)).then((response) => {
+      if (!response.ok) throw new Error("Room fetch failed");
+      return response.json();
+    });
+  }
+
+  function writeRemoteRoom(room) {
+    savingRooms.add(room.code);
+    return fetch(roomUrl(room.code), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(room)
+    }).then((response) => {
+      if (!response.ok) throw new Error("Room save failed");
+      return response.json();
+    }).finally(() => {
+      savingRooms.delete(room.code);
+    });
   }
 
   function readRoom(code) {
@@ -92,8 +121,11 @@
     room.updatedAt = Date.now();
     if (firebaseEnabled) {
       remoteRooms[room.code] = room;
-      database.ref(roomPath(room.code)).set(room).catch(() => {
-        noticeText = "线上房间保存失败。请检查 Firebase 配置和数据库规则。";
+      writeRemoteRoom(room).then((savedRoom) => {
+        remoteRooms[room.code] = savedRoom;
+        render();
+      }).catch(() => {
+        noticeText = "线上房间保存失败。请检查 Firebase 数据库规则。";
         render();
       });
       render();
